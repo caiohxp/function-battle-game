@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Batalha de Funções Matemáticas</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .player-card {
+            position: relative;
+        }
+        .player-card.active {
+            transform: scale(1.05);
+            box-shadow: 0 0 20px var(--player-color), 0 0 10px var(--player-color-light);
+            border-color: var(--player-color);
+        }
+        .eliminated-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(31, 41, 55, 0.8);
+            color: #F87171;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            font-weight: bold;
+            border-radius: 0.75rem;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+        }
+        .player-card.eliminated .eliminated-overlay {
+            opacity: 1;
+        }
+        #messageBox {
+            transition: opacity 0.5s, transform 0.5s;
+        }
+        canvas {
+            cursor: crosshair;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-7xl mx-auto flex flex-col lg:flex-row gap-6">
+
+        <!-- Coluna do Jogo (Canvas e Mensagens) -->
+        <div class="flex-grow flex flex-col items-center justify-center bg-gray-800 rounded-2xl p-4 shadow-2xl">
+            <h1 class="text-3xl font-bold mb-4 text-cyan-400">Batalha de Funções</h1>
+            <canvas id="gameCanvas" class="bg-gray-900 rounded-lg border-2 border-gray-700"></canvas>
+            <div id="messageBox" class="mt-4 text-xl font-semibold h-8 opacity-0 transform translate-y-2"></div>
+        </div>
+
+        <!-- Coluna dos Jogadores -->
+        <div class="w-full lg:w-96 flex flex-col gap-4">
+            <div id="players-container" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-4">
+                <!-- Cards dos jogadores serão inseridos aqui pelo JS -->
+            </div>
+            <button id="resetButton" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-lg transition-transform transform hover:scale-105 shadow-lg">
+                Reiniciar Jogo
+            </button>
+        </div>
+
+    </div>
+
+    <script>
+        // --- Configurações Iniciais ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const playersContainer = document.getElementById('players-container');
+        const resetButton = document.getElementById('resetButton');
+        const messageBox = document.getElementById('messageBox');
+
+        const BALL_RADIUS = 10;
+        const HIT_TOLERANCE = BALL_RADIUS;
+        const MAX_STEPS = 3;
+        const STEP_DISTANCE = 30;
+
+        const players = [
+            { id: 1, name: 'Jogador 1', color: '#34D399', lightColor: '#A7F3D0', x: 0, y: 0, quadrant: 1, isAlive: true, functionType: 'fx', stepsRemaining: MAX_STEPS, hasFired: false, inputId: 'player1-input', buttonId: 'player1-btn', typeToggleId: 'player1-type-toggle', passBtnId: 'player1-pass-btn' },
+            { id: 2, name: 'Jogador 2', color: '#F87171', lightColor: '#FECACA', x: 0, y: 0, quadrant: 2, isAlive: true, functionType: 'fx', stepsRemaining: MAX_STEPS, hasFired: false, inputId: 'player2-input', buttonId: 'player2-btn', typeToggleId: 'player2-type-toggle', passBtnId: 'player2-pass-btn' },
+            { id: 3, name: 'Jogador 3', color: '#60A5FA', lightColor: '#BFDBFE', x: 0, y: 0, quadrant: 3, isAlive: true, functionType: 'fx', stepsRemaining: MAX_STEPS, hasFired: false, inputId: 'player3-input', buttonId: 'player3-btn', typeToggleId: 'player3-type-toggle', passBtnId: 'player3-pass-btn' },
+            { id: 4, name: 'Jogador 4', color: '#FBBF24', lightColor: '#FDE68A', x: 0, y: 0, quadrant: 4, isAlive: true, functionType: 'fx', stepsRemaining: MAX_STEPS, hasFired: false, inputId: 'player4-input', buttonId: 'player4-btn', typeToggleId: 'player4-type-toggle', passBtnId: 'player4-pass-btn' }
+        ];
+        let currentPlayerIndex = 0;
+        let scale = 2;
+        let drawnFunctions = [];
+        let gameOver = false;
+        let isAnimating = false;
+
+        // --- Funções de Coordenadas ---
+        const toCartesian = (canvasX, canvasY) => ({
+            x: (canvasX - canvas.width / 2) / scale,
+            y: (canvas.height / 2 - canvasY) / scale
+        });
+
+        const toCanvas = (cartesianX, cartesianY) => ({
+            x: cartesianX * scale + canvas.width / 2,
+            y: canvas.height / 2 - cartesianY * scale
+        });
+        
+        // --- Funções de Desenho no Canvas ---
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            const size = Math.min(container.clientWidth - 32, window.innerHeight * 0.7);
+            canvas.width = size;
+            canvas.height = size;
+            drawEverything();
+        }
+
+        function drawGrid() {
+            ctx.strokeStyle = '#4A5568';
+            ctx.lineWidth = 0.5;
+            const step = 20 * scale;
+            for (let x = canvas.width / 2 % step; x < canvas.width; x += step) {
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+            }
+            for (let y = canvas.height / 2 % step; y < canvas.height; y += step) {
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+            }
+        }
+        
+        function drawQuadrantLabels() {
+            ctx.fillStyle = 'rgba(113, 128, 150, 0.15)';
+            ctx.font = `bold ${canvas.width / 5}px Inter`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            const origin = toCanvas(0,0);
+            const offsetX = canvas.width / 4;
+            const offsetY = canvas.height / 4;
+
+            ctx.fillText('1', origin.x + offsetX, origin.y - offsetY);
+            ctx.fillText('2', origin.x - offsetX, origin.y - offsetY);
+            ctx.fillText('3', origin.x - offsetX, origin.y + offsetY);
+            ctx.fillText('4', origin.x + offsetX, origin.y + offsetY);
+        }
+
+        function drawAxes() {
+            ctx.strokeStyle = '#A0AEC0';
+            ctx.lineWidth = 2;
+            const origin = toCanvas(0, 0);
+            ctx.beginPath(); ctx.moveTo(0, origin.y); ctx.lineTo(canvas.width, origin.y); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(origin.x, 0); ctx.lineTo(origin.x, canvas.height); ctx.stroke();
+            ctx.fillStyle = '#A0AEC0';
+            ctx.font = '14px Inter';
+            ctx.textAlign = 'start';
+            ctx.textBaseline = 'alphabetic';
+            ctx.fillText('x', canvas.width - 15, origin.y - 10);
+            ctx.fillText('y', origin.x + 10, 15);
+            ctx.font = '12px Inter';
+            ctx.lineWidth = 1;
+            const step = 50;
+            const maxCartesianX = toCartesian(canvas.width, 0).x;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            for (let i = step; i <= maxCartesianX; i += step) {
+                const pos = toCanvas(i, 0);
+                ctx.fillText(i, pos.x, pos.y + 8);
+                ctx.beginPath(); ctx.moveTo(pos.x, pos.y - 4); ctx.lineTo(pos.x, pos.y + 4); ctx.stroke();
+            }
+            for (let i = -step; i >= -maxCartesianX; i -= step) {
+                const pos = toCanvas(i, 0);
+                ctx.fillText(i, pos.x, pos.y + 8);
+                ctx.beginPath(); ctx.moveTo(pos.x, pos.y - 4); ctx.lineTo(pos.x, pos.y + 4); ctx.stroke();
+            }
+            const maxCartesianY = toCartesian(0, 0).y;
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+            for (let i = step; i <= maxCartesianY; i += step) {
+                const pos = toCanvas(0, i);
+                ctx.fillText(i, pos.x - 8, pos.y);
+                ctx.beginPath(); ctx.moveTo(pos.x - 4, pos.y); ctx.lineTo(pos.x + 4, pos.y); ctx.stroke();
+            }
+            for (let i = -step; i >= -maxCartesianY; i -= step) {
+                const pos = toCanvas(0, i);
+                ctx.fillText(i, pos.x - 8, pos.y);
+                ctx.beginPath(); ctx.moveTo(pos.x - 4, pos.y); ctx.lineTo(pos.x + 4, pos.y); ctx.stroke();
+            }
+        }
+
+        function drawPlayerBall(player) {
+            if (!player.isAlive) return;
+            const canvasCoords = toCanvas(player.x, player.y);
+            ctx.beginPath();
+            ctx.arc(canvasCoords.x, canvasCoords.y, BALL_RADIUS, 0, Math.PI * 2);
+            ctx.fillStyle = player.color;
+            ctx.fill();
+            ctx.strokeStyle = player.lightColor;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        function drawFunction(func, color, type, originX, originY) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            let firstPoint = true;
+
+            if (type === 'fx') {
+                for (let canvasX = 0; canvasX <= canvas.width; canvasX++) {
+                    const relativeCartesianX = toCartesian(canvasX, 0).x - originX;
+                    try {
+                        const relativeCartesianY = func(relativeCartesianX);
+                        if (isFinite(relativeCartesianY)) {
+                            const canvasCoords = toCanvas(originX + relativeCartesianX, originY + relativeCartesianY);
+                            if (firstPoint) { ctx.moveTo(canvasCoords.x, canvasCoords.y); firstPoint = false; } else { ctx.lineTo(canvasCoords.x, canvasCoords.y); }
+                        }
+                    } catch (e) {}
+                }
+            } else { // type === 'fy'
+                 for (let canvasY = 0; canvasY <= canvas.height; canvasY++) {
+                    const relativeCartesianY = toCartesian(0, canvasY).y - originY;
+                    try {
+                        const relativeCartesianX = func(relativeCartesianY);
+                        if (isFinite(relativeCartesianX)) {
+                            const canvasCoords = toCanvas(originX + relativeCartesianX, originY + relativeCartesianY);
+                             if (firstPoint) { ctx.moveTo(canvasCoords.x, canvasCoords.y); firstPoint = false; } else { ctx.lineTo(canvasCoords.x, canvasCoords.y); }
+                        }
+                    } catch (e) {}
+                }
+            }
+            ctx.stroke();
+        }
+
+        function drawEverything() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawQuadrantLabels();
+            drawGrid();
+            drawAxes();
+            drawnFunctions.forEach(item => drawFunction(item.func, item.color, item.type, item.originX, item.originY));
+            players.forEach(drawPlayerBall);
+        }
+        
+        // --- Lógica do Jogo ---
+        function setupPlayerCards() {
+            playersContainer.innerHTML = '';
+            players.forEach(player => {
+                const card = document.createElement('div');
+                card.id = `player${player.id}-card`;
+                card.className = 'player-card p-4 rounded-xl border-2 border-gray-700 transition-all duration-300';
+                card.style.setProperty('--player-color', player.color);
+                card.style.setProperty('--player-color-light', player.lightColor);
+                card.style.backgroundColor = '#1F2937';
+
+                card.innerHTML = `
+                    <div class="eliminated-overlay">ELIMINADO</div>
+                    <div class="flex justify-between items-center mb-2">
+                        <h2 class="text-xl font-bold" style="color: ${player.color}">${player.name}</h2>
+                        <div id="player${player.id}-status" class="text-lg font-semibold bg-gray-700 px-3 py-1 rounded-md">VIVO</div>
+                    </div>
+                    <div class="flex justify-between items-center text-sm text-gray-400 mb-3">
+                        <span>Quadrante: <span class="font-bold text-white">${player.quadrant}</span></span>
+                        <span id="player${player.id}-steps-display">Passos: <span class="font-bold text-white">${player.stepsRemaining}</span></span>
+                    </div>
+                    <div class="flex gap-2 items-center mb-3">
+                        <button id="${player.typeToggleId}" class="font-mono bg-gray-600 hover:bg-gray-500 rounded-md px-3 py-2 transition">y = f(x)</button>
+                        <input type="text" id="${player.inputId}" placeholder="Sua função aqui..." class="flex-grow bg-gray-900 border border-gray-600 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2" style="--tw-ring-color: ${player.color};">
+                    </div>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button id="${player.buttonId}" class="w-full text-white font-bold py-2 px-4 rounded-lg transition-transform transform hover:scale-105" style="background-color: ${player.color};">
+                            Disparar
+                        </button>
+                        <button id="${player.passBtnId}" class="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-transform transform hover:scale-105">
+                            Passar a Vez
+                        </button>
+                    </div>
+                `;
+                playersContainer.appendChild(card);
+            });
+            
+            players.forEach(player => {
+                document.getElementById(player.buttonId).addEventListener('click', () => handlePlayerTurn(player.id));
+                document.getElementById(player.inputId).addEventListener('keyup', (event) => {
+                    if (event.key === 'Enter') handlePlayerTurn(player.id);
+                });
+                document.getElementById(player.typeToggleId).addEventListener('click', (e) => {
+                    player.functionType = player.functionType === 'fx' ? 'fy' : 'fx';
+                    e.target.textContent = player.functionType === 'fx' ? 'y = f(x)' : 'x = f(y)';
+                });
+                document.getElementById(player.passBtnId).addEventListener('click', () => handlePassTurn(player.id));
+            });
+        }
+        
+        function getPlayerQuadrant(x, y) {
+            if (x > 0 && y > 0) return 1; if (x < 0 && y > 0) return 2;
+            if (x < 0 && y < 0) return 3; if (x > 0 && y < 0) return 4;
+            return 0;
+        }
+        
+        function isPathClear(startX, startY, endX, endY) {
+            const samples = 10;
+            const dx = (endX - startX) / samples;
+            const dy = (endY - startY) / samples;
+
+            for (let i = 1; i <= samples; i++) {
+                const checkX = startX + i * dx;
+                const checkY = startY + i * dy;
+
+                for (const item of drawnFunctions) {
+                    try {
+                        const relativeCheckX = checkX - item.originX;
+                        const relativeCheckY = checkY - item.originY;
+                        if (item.type === 'fx') {
+                            const funcY = item.func(relativeCheckX);
+                            if (Math.abs(funcY - relativeCheckY) < (BALL_RADIUS / 2) / scale) return false;
+                        } else {
+                            const funcX = item.func(relativeCheckY);
+                            if (Math.abs(funcX - relativeCheckX) < (BALL_RADIUS / 2) / scale) return false;
+                        }
+                    } catch(e) {}
+                }
+            }
+            return true;
+        }
+
+        function handleCanvasClick(event) {
+            if (gameOver || isAnimating) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickCoords = toCartesian(event.clientX - rect.left, event.clientY - rect.top);
+            const activePlayer = players[currentPlayerIndex];
+            
+            if (!activePlayer.isAlive) { showMessage("Você foi eliminado!", "#F87171"); return; }
+            if (activePlayer.stepsRemaining <= 0) { showMessage("Sem passos restantes!", "#FBBF24"); return; }
+
+            const dx = clickCoords.x - activePlayer.x;
+            const dy = clickCoords.y - activePlayer.y;
+            const distance = Math.sqrt(dx*dx + dy*dy);
+            
+            if (distance === 0) return;
+
+            const dirX = dx / distance;
+            const dirY = dy / distance;
+
+            const targetX = activePlayer.x + dirX * STEP_DISTANCE;
+            const targetY = activePlayer.y + dirY * STEP_DISTANCE;
+
+            if (getPlayerQuadrant(targetX, targetY) !== activePlayer.quadrant) {
+                showMessage("Você não pode sair do seu quadrante!", "#FBBF24");
+                return;
+            }
+
+            if (!isPathClear(activePlayer.x, activePlayer.y, targetX, targetY)) {
+                showMessage("Caminho bloqueado por uma função!", "#FBBF24");
+                return;
+            }
+
+            activePlayer.x = targetX;
+            activePlayer.y = targetY;
+            activePlayer.stepsRemaining--;
+            updateActivePlayerUI();
+            drawEverything();
+        }
+
+        function updateActivePlayerUI() {
+            players.forEach((p, index) => {
+                const card = document.getElementById(`player${p.id}-card`);
+                const input = document.getElementById(p.inputId);
+                const button = document.getElementById(p.buttonId);
+                const typeToggle = document.getElementById(p.typeToggleId);
+                const passBtn = document.getElementById(p.passBtnId);
+                const stepsDisplay = document.getElementById(`player${p.id}-steps-display`);
+                
+                if (stepsDisplay) {
+                    stepsDisplay.innerHTML = `Passos: <span class="font-bold text-white">${p.stepsRemaining}</span>`;
+                }
+
+                const isTurn = index === currentPlayerIndex && p.isAlive && !gameOver && !isAnimating;
+
+                if (isTurn) card.classList.add('active'); else card.classList.remove('active');
+                
+                const isDisabled = !isTurn || isAnimating || gameOver;
+                input.disabled = isDisabled; 
+                button.disabled = isDisabled || p.hasFired; // Desabilita se já atirou
+                typeToggle.disabled = isDisabled;
+                passBtn.disabled = isDisabled;
+            });
+        }
+
+        function showMessage(text, color, duration = 3000) {
+            messageBox.textContent = text;
+            messageBox.style.color = color;
+            messageBox.style.opacity = '1';
+            messageBox.style.transform = 'translateY(0)';
+            if(duration > 0) {
+                setTimeout(() => {
+                    messageBox.style.opacity = '0';
+                    messageBox.style.transform = 'translateY(2px)';
+                }, duration);
+            }
+        }
+
+        function checkWinCondition() {
+            const alivePlayers = players.filter(p => p.isAlive);
+            if (alivePlayers.length <= 1) {
+                gameOver = true;
+                if (alivePlayers.length === 1) {
+                    const winner = alivePlayers[0];
+                    showMessage(`${winner.name} VENCEU O JOGO!`, winner.color, 0);
+                } else {
+                    showMessage("EMPATE! Ninguém sobreviveu.", "#A0AEC0", 0);
+                }
+                updateActivePlayerUI();
+                return true;
+            }
+            return false;
+        }
+        
+        function advanceToNextPlayer() {
+             if (gameOver) return;
+             let nextIndex = (currentPlayerIndex + 1) % players.length;
+             while(!players[nextIndex].isAlive) { nextIndex = (nextIndex + 1) % players.length; }
+             currentPlayerIndex = nextIndex;
+             players[currentPlayerIndex].stepsRemaining = MAX_STEPS;
+             players[currentPlayerIndex].hasFired = false; // Reseta o status de tiro
+             updateActivePlayerUI();
+        }
+        
+        function handlePassTurn(playerId) {
+            const player = players.find(p => p.id === playerId);
+            if (player.id !== players[currentPlayerIndex].id || isAnimating || gameOver) return;
+            showMessage(`${player.name} passou a vez.`, player.color, 2000);
+            advanceToNextPlayer();
+        }
+
+        function animateFunction(func, color, type, originX, originY, onComplete) {
+            const duration = 1000;
+            let startTime = null;
+
+            function animationLoop(timestamp) {
+                if (!startTime) startTime = timestamp;
+                const progress = Math.min((timestamp - startTime) / duration, 1);
+                drawEverything();
+                
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                let firstPoint = true;
+                if (type === 'fx') {
+                    for (let canvasX = 0; canvasX <= canvas.width * progress; canvasX++) {
+                        const relativeCartesianX = toCartesian(canvasX, 0).x - originX;
+                        try {
+                            const relativeCartesianY = func(relativeCartesianX);
+                            if (isFinite(relativeCartesianY)) {
+                                const canvasCoords = toCanvas(originX + relativeCartesianX, originY + relativeCartesianY);
+                                if (firstPoint) { ctx.moveTo(canvasCoords.x, canvasCoords.y); firstPoint = false; } else { ctx.lineTo(canvasCoords.x, canvasCoords.y); }
+                            }
+                        } catch (e) {}
+                    }
+                } else {
+                    for (let canvasY = 0; canvasY <= canvas.height * progress; canvasY++) {
+                        const relativeCartesianY = toCartesian(0, canvasY).y - originY;
+                        try {
+                            const relativeCartesianX = func(relativeCartesianY);
+                            if (isFinite(relativeCartesianX)) {
+                                const canvasCoords = toCanvas(originX + relativeCartesianX, originY + relativeCartesianY);
+                                if (firstPoint) { ctx.moveTo(canvasCoords.x, canvasCoords.y); firstPoint = false; } else { ctx.lineTo(canvasCoords.x, canvasCoords.y); }
+                            }
+                        } catch (e) {}
+                    }
+                }
+                ctx.stroke();
+                if (progress < 1) requestAnimationFrame(animationLoop);
+                else onComplete();
+            }
+            requestAnimationFrame(animationLoop);
+        }
+
+        function handlePlayerTurn(playerId) {
+            const player = players.find(p => p.id === playerId);
+            if (player.id !== players[currentPlayerIndex].id || !player.isAlive || gameOver || isAnimating || player.hasFired) return;
+
+            const functionString = document.getElementById(player.inputId).value.trim();
+            if (!functionString) { showMessage("Digite uma função!", "#FBBF24"); return; }
+
+            try {
+                const varName = player.functionType === 'fx' ? 'x' : 'y';
+                const userFunction = new Function(varName, `return ${functionString}`);
+                
+                player.hasFired = true; // Marca que o jogador já atirou
+                isAnimating = true;
+                updateActivePlayerUI();
+
+                animateFunction(userFunction, player.color, player.functionType, player.x, player.y, () => {
+                    drawnFunctions.push({ func: userFunction, color: player.color, type: player.functionType, originX: player.x, originY: player.y });
+                    let hit = false;
+                    players.forEach(target => {
+                        if (target.id !== player.id && target.isAlive) {
+                            let isHit = false;
+                            try {
+                                const relativeTargetX = target.x - player.x;
+                                const relativeTargetY = target.y - player.y;
+                                if (player.functionType === 'fx') {
+                                    isHit = Math.abs(userFunction(relativeTargetX) - relativeTargetY) <= HIT_TOLERANCE;
+                                } else {
+                                    isHit = Math.abs(userFunction(relativeTargetY) - relativeTargetX) <= HIT_TOLERANCE;
+                                }
+                            } catch(e) {}
+
+                            if (isHit) {
+                                hit = true;
+                                target.isAlive = false;
+                                document.getElementById(`player${target.id}-card`).classList.add('eliminated');
+                                document.getElementById(`player${target.id}-status`).textContent = 'ELIMINADO';
+                                showMessage(`${player.name} eliminou ${target.name}!`, player.color);
+                                drawEverything();
+                            }
+                        }
+                    });
+
+                    if (!hit) showMessage("Errou! Tente de novo.", "#9CA3AF");
+                    
+                    isAnimating = false;
+                    if (!checkWinCondition()) {
+                        updateActivePlayerUI();
+                    }
+                });
+                
+            } catch (error) {
+                showMessage("Função matemática inválida!", "#F87171");
+                player.hasFired = false; // Permite tentar de novo se a função for inválida
+                isAnimating = false;
+                updateActivePlayerUI();
+            }
+        }
+        
+        function getQuadrantSafePoint(quadrant) {
+            const maxCoordX = toCartesian(canvas.width, 0).x * 0.5;
+            const maxCoordY = toCartesian(0, 0).y * 0.5;
+            switch(quadrant) {
+                case 1: return { x: maxCoordX, y: maxCoordY };
+                case 2: return { x: -maxCoordX, y: maxCoordY };
+                case 3: return { x: -maxCoordX, y: -maxCoordY };
+                case 4: return { x: maxCoordX, y: -maxCoordY };
+            }
+        }
+
+        function repositionPlayer(player) {
+            const safePoint = getQuadrantSafePoint(player.quadrant);
+            player.x = safePoint.x + (Math.random() - 0.5) * 50;
+            player.y = safePoint.y + (Math.random() - 0.5) * 50;
+        }
+
+        function resetGame() {
+            drawnFunctions = [];
+            gameOver = false;
+            isAnimating = false;
+            players.forEach(p => {
+                p.isAlive = true;
+                p.stepsRemaining = MAX_STEPS;
+                p.hasFired = false;
+                repositionPlayer(p);
+                const card = document.getElementById(`player${p.id}-card`);
+                if(card) {
+                    card.classList.remove('eliminated');
+                    document.getElementById(`player${p.id}-status`).textContent = 'VIVO';
+                    document.getElementById(p.inputId).value = '';
+                }
+            });
+            currentPlayerIndex = 0;
+            drawEverything();
+            updateActivePlayerUI();
+            showMessage("Posicionem suas peças para começar!", "#FFFFFF");
+        }
+
+        // --- Inicialização ---
+        function init() {
+            setupPlayerCards();
+            resizeCanvas();
+            resetGame();
+            window.addEventListener('resize', resizeCanvas);
+            resetButton.addEventListener('click', resetGame);
+            canvas.addEventListener('click', handleCanvasClick);
+        }
+
+        init();
+    </script>
+</body>
+</html>
